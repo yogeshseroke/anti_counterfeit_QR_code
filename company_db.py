@@ -100,6 +100,51 @@ def init_company_tables() -> None:
     );
     """)
 
+    # ── Pre-seed master registered companies if table is empty ─────
+    cur.execute("SELECT COUNT(*) FROM companies")
+    if cur.fetchone()[0] == 0:
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        seed_apex = _cdp_seed_for("APEX-PHARMA-2026")
+        seed_aero = _cdp_seed_for("AEROSHIELD-TECH-2026")
+        seed_nova = _cdp_seed_for("NOVABIO-HEALTH-2026")
+
+        cur.executemany("""
+        INSERT INTO companies 
+        (company_id, company_name, company_code, contact_email, qr_payload, cdp_seed, status, total_scan_count, registered_at, notes)
+        VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', 0, ?, ?)
+        """, [
+            (
+                "APEX-PHARMA-2026",
+                "Apex Pharma Labs",
+                "APEX",
+                "auth@apexpharma.com",
+                "https://verify.apexpharma.com/auth?brand=APEX",
+                seed_apex,
+                now,
+                "Official pre-seeded master company registration"
+            ),
+            (
+                "AEROSHIELD-TECH-2026",
+                "AeroShield Defense Technologies",
+                "ASHIELD",
+                "security@aeroshield.tech",
+                "https://verify.aeroshield.tech/auth?brand=ASHIELD",
+                seed_aero,
+                now,
+                "Official pre-seeded master company registration"
+            ),
+            (
+                "NOVABIO-HEALTH-2026",
+                "NovaBio Therapeutics Inc.",
+                "NVBIO",
+                "verify@novabio.com",
+                "https://verify.novabio.com/auth?brand=NVBIO",
+                seed_nova,
+                now,
+                "Official pre-seeded master company registration"
+            )
+        ])
+
     conn.commit()
     conn.close()
 
@@ -221,16 +266,49 @@ def get_company_by_code(company_code: str) -> Optional[Dict[str, Any]]:
 
 def get_company_by_payload(qr_payload: str) -> Optional[Dict[str, Any]]:
     """
-    Looks up a company by exact QR payload string.
-    Called during verification after the QR code is decoded.
+    Looks up a company by QR payload string.
+    Supports exact string match, trailing slash normalized match,
+    and URL query parameter brand code match (e.g. brand=APEX).
     Returns None if no company owns this payload.
     """
+    if not qr_payload:
+        return None
+
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM companies WHERE qr_payload = ?", (qr_payload,))
+
+    # 1. Exact match
+    cur.execute("SELECT * FROM companies WHERE qr_payload = ?", (qr_payload.strip(),))
     row = cur.fetchone()
+    if row:
+        conn.close()
+        return dict(row)
+
+    # 2. Normalized match (without trailing slash or whitespace)
+    normalized = qr_payload.strip().rstrip("/")
+    cur.execute("SELECT * FROM companies WHERE rtrim(qr_payload, '/') = ?", (normalized,))
+    row = cur.fetchone()
+    if row:
+        conn.close()
+        return dict(row)
+
+    # 3. URL query parameter brand match (e.g. brand=APEX)
+    import urllib.parse
+    try:
+        parsed = urllib.parse.urlparse(qr_payload)
+        qs = urllib.parse.parse_qs(parsed.query)
+        brand_code = qs.get("brand", [None])[0]
+        if brand_code:
+            cur.execute("SELECT * FROM companies WHERE company_code = ? COLLATE NOCASE", (brand_code,))
+            row = cur.fetchone()
+            if row:
+                conn.close()
+                return dict(row)
+    except Exception:
+        pass
+
     conn.close()
-    return dict(row) if row else None
+    return None
 
 
 def list_all_companies() -> List[Dict[str, Any]]:

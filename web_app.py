@@ -1461,7 +1461,14 @@ def handle_verify_image(img_bytes: bytes) -> dict:
         payload, _, _ = robust_detect_and_decode_qr(img_cv)
         co = company_db.get_company_by_payload(payload) if payload else None
 
-        if co:
+        # Robust routing: detect company stickers even if payload URL has custom domain
+        is_company = bool(co)
+        if not is_company and payload:
+            lower_p = payload.lower()
+            if "brand=" in lower_p or "company=" in lower_p:
+                is_company = True
+
+        if is_company:
             res = verify_company_qr(img_pil, save_debug_artifacts=False)
         else:
             res = verify_anti_counterfeit_qr(img_pil, save_debug_artifacts=False)
